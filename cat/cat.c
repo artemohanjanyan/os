@@ -1,11 +1,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-//#include <sys/types.h>
-//#include <sys/stat.h>
 #include <fcntl.h>
 
 int const BUF_SIZE = 1024;
+int const STDIN_FD = 1, STDOUT_FD = 2;
 
 void cat(int infd, int outfd, int errfd)
 {
@@ -19,7 +18,7 @@ void cat(int infd, int outfd, int errfd)
 			int ret = write(outfd, buf + i, length - i);
 			if (ret == -1)
 			{
-				printf("Error during write(): %s\n", strerror(errno));
+				fprintf(stderr, "Error during write(): %s\n", strerror(errno));
 				return;
 			}
 
@@ -29,7 +28,7 @@ void cat(int infd, int outfd, int errfd)
 
 	if (length == -1)
 	{
-		printf("Error during read(): %s\n", strerror(errno));
+		fprintf(stderr, "Error during read(): %s\n", strerror(errno));
 		return;
 	}
 }
@@ -40,7 +39,7 @@ int main(int argc, char** argv)
 	if (argc > 1)
 		infd = open(argv[1], O_RDONLY);
 
-	cat(infd, 1, 2);
+	cat(infd, STDIN_FD, STDOUT_FD);
 
 	if (infd != 0)
 		close(infd);

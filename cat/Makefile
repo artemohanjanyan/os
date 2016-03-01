@@ -7,4 +7,4 @@ cat: cat.o
 	gcc -s cat.o -o cat
 
 clean:
-	rm cat cat.o
+	$(RM) cat cat.o

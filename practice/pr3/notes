@@ -1,0 +1,4 @@
+man 3 exec
+man 2 dup2
+man 2 pipe
+fork

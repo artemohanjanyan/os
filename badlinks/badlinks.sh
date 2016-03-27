@@ -1,4 +1,8 @@
-for i in `find`
+#!/bin/bash
+for i in `find -L $1`
 do
-	test -L "$i" && ! test -e "$i" && test "$((`date '+%s'` - `stat -c '%Y' "$i"` > 60*60*24*7))" && echo "$i"
+	if test -L "$i" && ! test -e "$i" && [ $(($(date '+%s') - $(stat -c '%Y' "$i"))) -ge $((60*60*24*7)) ]
+	then
+		echo "$i"
+	fi
 done

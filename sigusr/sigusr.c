@@ -19,12 +19,11 @@ int main()
 	act.sa_flags = SA_SIGINFO;
 	act.sa_sigaction = &handler;
 
-	sigemptyset(&act.sa_mask);
-	sigaddset(&act.sa_mask, SIGUSR1);
-	sigaddset(&act.sa_mask, SIGUSR2);
+	if (sigemptyset(&act.sa_mask) || sigaddset(&act.sa_mask, SIGUSR1) || sigaddset(&act.sa_mask, SIGUSR2))
+		fprintf(stderr, "Error during sig...set(): %s\n", strerror(errno));
 
 	if (sigaction(SIGUSR1, &act, NULL) || sigaction(SIGUSR2, &act, NULL))
-		fprintf(stderr, "Error during write(): %s\n", strerror(errno));
+		fprintf(stderr, "Error during sigaction(): %s\n", strerror(errno));
 
 	sleep(10);
 

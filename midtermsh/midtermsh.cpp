@@ -10,7 +10,7 @@
 #include <iostream>
 #include <functional>
 
-#define INVITATION "\x1B[1;31m$ \x1B[0;37m"
+#define INVITATION "\x1B[1;31m$ \x1B[0m"
 
 int const BUF_SIZE = 1024;
 
@@ -53,6 +53,7 @@ int main()
 {
 	struct sigaction act;
 	act.sa_handler = &handler;
+	act.sa_flags = 0;
 	error_check(sigemptyset(&act.sa_mask));
 	error_check(sigaddset(&act.sa_mask, SIGINT));
 	error_check(sigaddset(&act.sa_mask, SIGCHLD));

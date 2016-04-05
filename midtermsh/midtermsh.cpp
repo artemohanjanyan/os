@@ -10,6 +10,8 @@
 #include <iostream>
 #include <functional>
 
+#define INVITATION "\x1B[1;31m$ \x1B[0;37m"
+
 int const BUF_SIZE = 1024;
 
 void error_check(int res, std::string command = "some_func")
@@ -62,7 +64,7 @@ int main()
 	char buf[BUF_SIZE];
 	int length;
 
-	write_all(STDOUT_FILENO, "$ ");
+	write_all(STDOUT_FILENO, INVITATION);
 
 	while (true)
 	{
@@ -174,7 +176,7 @@ int main()
 				close(pipefd[1]);
 			close(pipefd[0]);
 
-			write_all(STDOUT_FILENO, "$ ");
+			write_all(STDOUT_FILENO, INVITATION);
 
 			error_check(sigaction(SIGINT, &act, NULL));
 			error_check(sigaction(SIGCHLD, &act, NULL));

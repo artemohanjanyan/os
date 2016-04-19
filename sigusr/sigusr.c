@@ -29,13 +29,19 @@ int main()
 	act.sa_flags = SA_SIGINFO;
 	act.sa_sigaction = &handler;
 
-	if (sigemptyset(&act.sa_mask)
-			|| sigaddset(&act.sa_mask, SIGUSR1) || sigaddset(&act.sa_mask, SIGUSR2)
-			|| sigaddset(&act.sa_mask, SIGALRM))
+	if (sigfillset(&act.sa_mask))
 		fprintf(stderr, "Error during sig...set(): %s\n", strerror(errno));
-
-	if (sigaction(SIGUSR1, &act, NULL) || sigaction(SIGUSR2, &act, NULL) || sigaction(SIGALRM, &act, NULL))
-		fprintf(stderr, "Error during sigaction(): %s\n", strerror(errno));
+	
+	int i;
+	for (i = 1; i < 32; ++i)
+	{
+		if (i != SIGKILL && i != SIGSTOP)
+			sigaction(i, &act, NULL);
+		//if (sigaction(i, &act, NULL))
+		//	fprintf(stderr, "Error during sigaction(): %s\n", strerror(errno));
+	}
+			
+	//if (sigaction(SIGUSR1, &act, NULL) || sigaction(SIGUSR2, &act, NULL) || sigaction(SIGALRM, &act, NULL))
 
 	alarm(10);
 	while (alarm_triggered == 0)
@@ -45,7 +51,7 @@ int main()
 	if (handled_signal == 0)
 		printf("No signals were caught\n");
 	else
-		printf("%s from %d\n", handled_signal == SIGUSR1 ? "SIGUSR1" : "SIGUSR2", origin_pid);
+		printf("%d from %d\n", handled_signal, origin_pid);
 
 	return 0;
 }

@@ -69,12 +69,15 @@ int main()
 
 	while (true)
 	{
-		length = read(STDIN_FILENO, buf, BUF_SIZE);
-		if (length == 0)
-			exit(0);
-		error_check(length, "read");
-		if (length != -1)
-			input += {buf, static_cast<size_t>(length)};
+		if (input.find('\n') == std::string::npos)
+		{
+			length = read(STDIN_FILENO, buf, BUF_SIZE);
+			if (length == 0)
+				exit(0);
+			error_check(length, "read");
+			if (length != -1)
+				input += {buf, static_cast<size_t>(length)};
+		}
 
 		size_t pos = input.find('\n');
 
@@ -175,6 +178,11 @@ int main()
 
 			if (!is_closed)
 				close(pipefd[1]);
+
+			while ((length = read(pipefd[0], buf, BUF_SIZE)) > 0)
+				input += {buf, static_cast<size_t>(length)};
+			error_check(length);
+
 			close(pipefd[0]);
 
 			write_all(STDOUT_FILENO, INVITATION);

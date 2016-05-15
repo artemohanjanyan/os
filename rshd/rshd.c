@@ -59,7 +59,7 @@ int fork_term(int master_fd, int slave_fd)
 	{
 		bool dup_fail = dup2(slave_fd, STDIN_FILENO) == -1 ||
 		                dup2(slave_fd, STDOUT_FILENO) == -1 ||
-							 dup2(slave_fd, STDERR_FILENO) == -1;
+		                dup2(slave_fd, STDERR_FILENO) == -1;
 		close(master_fd);
 		close(slave_fd);
 		ioctl(0, TIOCSCTTY, 1);
@@ -77,7 +77,7 @@ int fork_term(int master_fd, int slave_fd)
 int main(int argc, char *argv[])
 {
 	/* ----------
-		Run server
+	   Run server
 	   ---------- */
 
 	int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -112,8 +112,8 @@ int main(int argc, char *argv[])
 	}
 
 	/* -----------
-		Setup epoll
-		----------- */
+	   Setup epoll
+	   ----------- */
 
 	int epoll_fd;
 	if ((epoll_fd = epoll_create1(0)) == -1)
@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
 		goto close_epoll;
 
 	/* ------------------------
-		Communicate with clients
+	   Communicate with clients
 	   ------------------------ */
 
 	epoll_event events[MAX_EVENTS];

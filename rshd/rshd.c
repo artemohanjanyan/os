@@ -62,8 +62,7 @@ int fork_term(int master_fd, int slave_fd)
 		                dup2(slave_fd, STDERR_FILENO) == -1;
 		close(master_fd);
 		close(slave_fd);
-		ioctl(0, TIOCSCTTY, 1);
-		if (!dup_fail && setsid() != -1)
+		if (!dup_fail && setsid() != -1 && ioctl(0, TIOCSCTTY, 1) != -1)
 			execlp("/bin/sh", "/bin/sh", NULL);
 		exit(0);
 	}
@@ -74,8 +73,74 @@ int fork_term(int master_fd, int slave_fd)
 	}
 }
 
+bool is_deleted(void *ptr, void *deleted[], int deleted_cnt)
+{
+	int i = 0;
+	for (; i < deleted_cnt; ++i)
+		if (ptr == deleted[i])
+			break;
+	return i < deleted_cnt && ptr == deleted[i];
+}
+
+int demonize()
+{
+	int pid = fork();
+	if (pid == -1)
+		return -1;
+
+	if (pid != 0)
+		exit(0);
+
+	int sid = setsid();
+	if (sid == -1)
+		return -1;
+
+	pid = fork();
+	if (pid == -1)
+		return -1;
+
+	if (pid != 0)
+	{
+		FILE *file = fopen("/tmp/rshd.pid", "w");
+		if (file == NULL)
+			exit(0);
+		fprintf(file, "%d\n", pid);
+		fclose(file);
+		exit(0);
+	}
+
+	return 0;
+}
+
+ssize_t write_str(int fd, char *str, ssize_t str_size)
+{
+	ssize_t written = 0;
+	while (written < str_size)
+	{
+		ssize_t n = write(fd, str + written, str_size - written);
+		if (n != -1)
+			written += n;
+		else
+			break;
+	}
+	return written;
+}
+
 int main(int argc, char *argv[])
 {
+	if (argc == 1)
+	{
+		printf("Wrong argument format.\n");
+		printf("Usage: ./rshd <port>\n");
+		return EXIT_FAILURE;
+	}
+
+	if (demonize() == -1)
+	{
+		printf("Error during demonization: %s\n", strerror(errno));
+		return EXIT_FAILURE;
+	}
+
 	/* ----------
 	   Run server
 	   ---------- */
@@ -86,14 +151,7 @@ int main(int argc, char *argv[])
 		sockaddr_in address;
 		address.sin_family = AF_INET;
 		address.sin_addr.s_addr = INADDR_ANY;
-		if (argc > 1)
-			address.sin_port = htons(atoi(argv[1]));
-		else
-		{
-			printf("Wrong argument format.\n");
-			printf("Usage: ./rshd <port>\n");
-			goto close_server;
-		}
+		address.sin_port = htons(atoi(argv[1]));
 
 		int enable = 1;
 		setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable));
@@ -141,7 +199,7 @@ int main(int argc, char *argv[])
 	while (int event_n = epoll_wait(epoll_fd, events, MAX_EVENTS, -1))
 	{
 		void *deleted_ptrs[MAX_EVENTS * 2];
-		int deleted_ptrs_cnt = 0;
+		int deleted_n = 0;
 
 		for (int event_i = 0; event_i < event_n; ++event_i)
 		{
@@ -166,7 +224,7 @@ int main(int argc, char *argv[])
 					client_data *client;
 					client = (client_data*) malloc(sizeof(client_data));
 					pty_data *pty;
-					pty = (pty_data*)    malloc(sizeof(pty_data));
+					pty = (pty_data*) malloc(sizeof(pty_data));
 
 					client->pty = pty;
 					pty->client = client;
@@ -219,25 +277,20 @@ int main(int argc, char *argv[])
 
 				case CLIENT:
 				{
-					int deleted_ptrs_it = 0;
-					for (; deleted_ptrs_it < deleted_ptrs_cnt; ++deleted_ptrs_it)
-						if (events[event_i].data.ptr == deleted_ptrs[deleted_ptrs_it])
-							break;
-					if (deleted_ptrs_it < deleted_ptrs_cnt &&
-							events[event_i].data.ptr == deleted_ptrs[deleted_ptrs_it])
+					if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
 						break;
 
 					if (events[event_i].events & EPOLLIN)
 					{
 						ssize_t length = read(data->client->client_fd, buf, BUF_SIZE);
-						ssize_t written = 0;
-						while (written < length)
+						ssize_t written = write_str(data->client->pty->master_fd, buf, length);
+						++written;
+						while (written > 0)
 						{
-							ssize_t n = write(data->client->pty->master_fd, buf + written, length - written);
-							if (n != -1)
-								written += n;
-							else
+							ssize_t read_n = read(data->client->pty->master_fd, buf, length);
+							if (read_n == -1)
 								break;
+							written -= read_n;
 						}
 					}
 
@@ -248,7 +301,7 @@ int main(int argc, char *argv[])
 						close(data->client->client_fd);
 						close(data->client->pty->master_fd);
 
-						deleted_ptrs[deleted_ptrs_cnt++] = data->client->pty;
+						deleted_ptrs[deleted_n++] = data->client->pty;
 
 						free(data->client->pty);
 						free(data->client);
@@ -260,26 +313,13 @@ int main(int argc, char *argv[])
 
 				case CONNECTION:
 				{
-					int deleted_ptrs_it = 0;
-					for (; deleted_ptrs_it < deleted_ptrs_cnt; ++deleted_ptrs_it)
-						if (events[event_i].data.ptr == deleted_ptrs[deleted_ptrs_it])
-							break;
-					if (deleted_ptrs_it < deleted_ptrs_cnt &&
-							events[event_i].data.ptr == deleted_ptrs[deleted_ptrs_it])
+					if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
 						break;
 
 					if (events[event_i].events & EPOLLIN)
 					{
 						ssize_t length = read(data->pty->master_fd, buf, BUF_SIZE);
-						ssize_t written = 0;
-						while (written < length)
-						{
-							ssize_t n = write(data->pty->client->client_fd, buf + written, length - written);
-							if (n != -1)
-								written += n;
-							else
-								break;
-						}
+						write_str(data->pty->client->client_fd, buf, length);
 					}
 
 					if (events[event_i].events & ~EPOLLIN)
@@ -289,7 +329,7 @@ int main(int argc, char *argv[])
 						close(data->pty->master_fd);
 						close(data->pty->client->client_fd);
 
-						deleted_ptrs[deleted_ptrs_cnt++] = data->pty->client;
+						deleted_ptrs[deleted_n++] = data->pty->client;
 
 						free(data->client->pty);
 						free(data->client);

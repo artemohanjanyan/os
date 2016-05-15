@@ -23,12 +23,14 @@ struct pty_data
 {
 	int master_fd;
 	client_data *client;
+	event_data *data;
 };
 
 struct client_data
 {
 	int client_fd;
 	pty_data *pty;
+	event_data *data;
 };
 
 enum data_type
@@ -240,6 +242,7 @@ int main(int argc, char *argv[])
 						goto close_client;
 					data->type = CLIENT;
 					data->client = client;
+					client->data = data;
 					event.data.ptr = data;
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client->client_fd, &event) == -1)
 						goto free_client_data;
@@ -249,6 +252,7 @@ int main(int argc, char *argv[])
 						goto unregister_client;
 					data->type = CONNECTION;
 					data->pty = pty;
+					pty->data = data;
 					event.data.ptr = data;
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty->master_fd, &event) == -1)
 						goto free_pty_data;
@@ -303,6 +307,7 @@ int main(int argc, char *argv[])
 
 						deleted_ptrs[deleted_n++] = data->client->pty;
 
+						free(data->client->pty->data);
 						free(data->client->pty);
 						free(data->client);
 						free(data);
@@ -331,6 +336,7 @@ int main(int argc, char *argv[])
 
 						deleted_ptrs[deleted_n++] = data->pty->client;
 
+						free(data->client->pty->data);
 						free(data->client->pty);
 						free(data->client);
 						free(data);

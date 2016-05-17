@@ -130,7 +130,7 @@ int is_deleted(void *ptr, void *deleted[], size_t deleted_cnt)
 	return i < deleted_cnt && ptr == deleted[i];
 }
 
-int demonize()
+int daemonize()
 {
 	int pid = fork();
 	if (pid == -1)
@@ -162,18 +162,18 @@ int demonize()
 
 int main(int argc, char *argv[])
 {
-	if (argc == 1)
+	if (argc <= 1)
 	{
 		printf("Wrong argument format.\n");
-		printf("Usage: ./rshd <port>\n");
+		printf("Usage: ./rshd <port> [--nodaemon]\n");
 		return EXIT_FAILURE;
 	}
 
-	//if (demonize() == -1)
-	//{
-	//	printf("Error during demonization: %s\n", strerror(errno));
-	//	return EXIT_FAILURE;
-	//}
+	if (!(argc >= 3 && strcmp(argv[2], "--nodaemon") == 0) && daemonize() == -1)
+	{
+		printf("Error during daemonization: %s\n", strerror(errno));
+		return EXIT_FAILURE;
+	}
 
 	/* ----------
 	   Run server
@@ -239,6 +239,10 @@ int main(int argc, char *argv[])
 		for (int event_i = 0; event_i < event_n; ++event_i)
 		{
 			struct event_data *data = (struct event_data*) events[event_i].data.ptr;
+
+			if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
+				break;
+
 			switch (data->type)
 			{
 				case SERVER:
@@ -329,9 +333,6 @@ int main(int argc, char *argv[])
 
 				case CLIENT:
 				{
-					if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
-						break;
-
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
 						fprintf(stderr, "Client close\n");
@@ -341,6 +342,7 @@ int main(int argc, char *argv[])
 						close(data->client->client_fd);
 						close(data->client->pty->master_fd);
 
+						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->client->pty->data;
 
 						buffer_free(data->client->pty->buf);
@@ -387,9 +389,6 @@ int main(int argc, char *argv[])
 
 				case CONNECTION:
 				{
-					if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
-						break;
-
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
 						fprintf(stderr, "Connection close\n");
@@ -399,6 +398,7 @@ int main(int argc, char *argv[])
 						close(data->pty->master_fd);
 						close(data->pty->client->client_fd);
 
+						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->pty->client->data;
 
 						buffer_free(data->pty->client->buf);

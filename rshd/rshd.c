@@ -13,58 +13,19 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "string_buffer.h"
+
 #define BUF_SIZE 1024
 #define MAX_EVENTS 50
 
-char glob_buf[BUF_SIZE];
-
 struct event_data;
 struct client_data;
-
-struct buffer
-{
-	char *buf;
-	size_t length;
-};
-
-void buffer_init(struct buffer *buf)
-{
-	buf->buf = NULL;
-	buf->length = 0;
-}
-
-void buffer_append(struct buffer *buf, char str[], size_t length)
-{
-	// TODO check for realloc error
-	buf->buf = (char*) realloc(buf->buf, buf->length + length);
-	for (size_t i = 0; i < length; ++i)
-		buf->buf[i + buf->length] = str[i];
-	buf->length += length;
-}
-
-void buffer_drop(struct buffer *buf, size_t length)
-{
-	if (length > buf->length)
-		length = buf->length;
-	char *new_buf = (char*) malloc(buf->length - length);
-	for (size_t i = 0; i < buf->length - length; ++i)
-		new_buf[i] = buf->buf[length + i];
-	free(buf->buf);
-	buf->buf = new_buf;
-	buf->length -= length;
-}
-
-void buffer_free(struct buffer *buf)
-{
-	free(buf->buf);
-	free(buf);
-}
 
 struct pty_data
 {
 	int master_fd;
 	struct client_data *client;
-	struct buffer *buf;
+	struct string_buffer buffer;
 	ssize_t skip;
 	struct event_data *data;
 };
@@ -73,7 +34,7 @@ struct client_data
 {
 	int client_fd;
 	struct pty_data *pty;
-	struct buffer *buf;
+	struct string_buffer buffer;
 	struct event_data *data;
 };
 
@@ -233,6 +194,7 @@ int main(int argc, char *argv[])
 	int event_n;
 	while ((event_n = epoll_wait(epoll_fd, events, MAX_EVENTS, -1)) > 0)
 	{
+		char glob_buf[BUF_SIZE];
 		void *deleted_ptrs[MAX_EVENTS * 2];
 		size_t deleted_n = 0;
 
@@ -247,7 +209,7 @@ int main(int argc, char *argv[])
 			{
 				case SERVER:
 				{
-					fprintf(stderr, "Server\n");
+					fprintf(stderr, "New connection\n");
 
 					int master_fd, slave_fd;
 					if ((master_fd = posix_openpt(O_RDWR)) == -1 ||
@@ -277,6 +239,8 @@ int main(int argc, char *argv[])
 					if (client->client_fd == -1)
 						goto free_data;
 
+					event.events = EPOLLIN | EPOLLRDHUP;
+
 					data = (struct event_data*) malloc(sizeof(struct event_data));
 					if (data == NULL)
 						goto close_client;
@@ -297,20 +261,16 @@ int main(int argc, char *argv[])
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty->master_fd, &event) == -1)
 						goto free_pty_data;
 
-					client->buf = (struct buffer*) malloc(sizeof(struct buffer));
-					if (client->buf == NULL)
+					if (string_buffer_init(&client->buffer))
 						goto free_pty_data;
-					buffer_init(client->buf);
 
-					pty->buf = (struct buffer*) malloc(sizeof(struct buffer));
-					if (pty->buf == NULL)
+					if (string_buffer_init(&pty->buffer))
 						goto free_client_buffer;
-					buffer_init(pty->buf);
 
 					goto server_finally;
 
 				free_client_buffer:
-					free(client->buf);
+					string_buffer_free(&client->buffer);
 				free_pty_data:
 					free(data);
 				unregister_client:
@@ -345,10 +305,10 @@ int main(int argc, char *argv[])
 						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->client->pty->data;
 
-						buffer_free(data->client->pty->buf);
+						string_buffer_free(&data->client->pty->buffer);
 						free(data->client->pty->data);
 						free(data->client->pty);
-						free(data->client->buf);
+						string_buffer_free(&data->client->buffer);
 						free(data->client);
 						free(data);
 
@@ -361,7 +321,7 @@ int main(int argc, char *argv[])
 						ssize_t length = read(data->client->client_fd, glob_buf, BUF_SIZE);
 						if (length > 0)
 						{
-							buffer_append(data->client->pty->buf, glob_buf, (size_t) length);
+							string_buffer_append(&data->client->pty->buffer, glob_buf, (size_t) length);
 
 							event.data.ptr = data->client->pty->data;
 							event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
@@ -373,10 +333,12 @@ int main(int argc, char *argv[])
 
 					if (events[event_i].events & EPOLLOUT)
 					{
-						ssize_t written = write(data->client->client_fd, data->client->buf->buf, data->client->buf->length);
+						ssize_t written = write(data->client->client_fd,
+						                        string_buffer_get_str(&data->client->buffer),
+						                        string_buffer_get_length(&data->client->buffer));
 						if (written > 0)
-							buffer_drop(data->client->buf, (size_t) written);
-						if (data->client->buf->length == 0)
+							string_buffer_drop(&data->client->buffer, (size_t) written);
+						if (string_buffer_is_empty(&data->client->buffer))
 						{
 							event.data.ptr = data;
 							event.events = EPOLLIN | EPOLLRDHUP;
@@ -401,10 +363,10 @@ int main(int argc, char *argv[])
 						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->pty->client->data;
 
-						buffer_free(data->pty->client->buf);
+						string_buffer_free(&data->pty->client->buffer);
 						free(data->pty->client->data);
 						free(data->pty->client);
-						free(data->pty->buf);
+						string_buffer_free(&data->pty->buffer);
 						free(data->pty);
 						free(data);
 
@@ -423,10 +385,13 @@ int main(int argc, char *argv[])
 								length -= data->pty->skip;
 								data->pty->skip = 0;
 
-								buffer_append(data->pty->client->buf, skipped_buf, (size_t) length);
-								event.data.ptr = data->pty->client->data;
-								event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-								epoll_ctl(epoll_fd, EPOLL_CTL_MOD, data->pty->client->client_fd, &event);
+								if (length > 0)
+								{
+									string_buffer_append(&data->pty->client->buffer, skipped_buf, (size_t) length);
+									event.data.ptr = data->pty->client->data;
+									event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+									epoll_ctl(epoll_fd, EPOLL_CTL_MOD, data->pty->client->client_fd, &event);
+								}
 							}
 							else
 								data->pty->skip -= length;
@@ -435,10 +400,12 @@ int main(int argc, char *argv[])
 
 					if (events[event_i].events & EPOLLOUT)
 					{
-						ssize_t written = write(data->pty->master_fd, data->pty->buf->buf, data->pty->buf->length);
+						ssize_t written = write(data->pty->master_fd,
+						                        string_buffer_get_str(&data->pty->buffer),
+						                        string_buffer_get_length(&data->pty->buffer));
 						if (written > 0)
-							buffer_drop(data->pty->buf, (size_t) written);
-						if (data->pty->buf->length == 0)
+							string_buffer_drop(&data->pty->buffer, (size_t) written);
+						if (string_buffer_is_empty(&data->pty->buffer))
 						{
 							event.data.ptr = data;
 							event.events = EPOLLIN | EPOLLRDHUP;

@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
 						while (written > 0)
 						{
 							ssize_t read_n = read(data->client->pty->master_fd, buf, length);
-							if (read_n == -1)
+							if (read_n <= 0)
 								break;
 							written -= read_n;
 						}

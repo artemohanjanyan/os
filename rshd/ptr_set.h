@@ -8,6 +8,10 @@ extern "C"
 
 struct ptr_set_impl;
 
+/* -----------------------------
+   C wrapper for std::set<void*>
+   ----------------------------- */
+
 struct ptr_set
 {
 	struct ptr_set_impl *impl;
@@ -24,6 +28,10 @@ int ptr_set_contains(struct ptr_set *set, void *ptr);
 
 void *ptr_set_first(struct ptr_set *set);
 
+
+/* ---------------------------------------
+   C wrapper for std::set<void*>::iterator
+   --------------------------------------- */
 
 struct ptr_set_iterator
 {

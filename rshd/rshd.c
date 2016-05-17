@@ -106,15 +106,6 @@ int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd, struct p
 	}
 }
 
-int is_deleted(void *ptr, void *deleted[], size_t deleted_cnt)
-{
-	size_t i = 0;
-	for (; i < deleted_cnt; ++i)
-		if (ptr == deleted[i])
-			break;
-	return i < deleted_cnt && ptr == deleted[i];
-}
-
 int daemonize()
 {
 	int pid = fork();
@@ -248,22 +239,18 @@ int main(int argc, char *argv[])
 	while ((event_n = epoll_wait(epoll_fd, events, MAX_EVENTS, -1)) > 0)
 	{
 		char glob_buf[BUF_SIZE];
-		void *deleted_ptrs[MAX_EVENTS * 2];
-		size_t deleted_n = 0;
 
 		for (int event_i = 0; event_i < event_n; ++event_i)
 		{
 			struct event_data *data = (struct event_data*) events[event_i].data.ptr;
 
-			if (is_deleted(events[event_i].data.ptr, deleted_ptrs, deleted_n))
+			if (data != &server_data && !ptr_set_contains(&data_set, events[event_i].data.ptr))
 				break;
 
 			switch (data->type)
 			{
 				case SERVER:
 				{
-					fprintf(stderr, "New connection\n");
-
 					int master_fd, slave_fd;
 					if ((master_fd = posix_openpt(O_RDWR)) == -1 ||
 							grantpt(master_fd) == -1 ||
@@ -351,13 +338,8 @@ int main(int argc, char *argv[])
 				{
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
-						fprintf(stderr, "Client close\n");
-
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->client_fd, NULL);
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->pty->master_fd, NULL);
-
-						deleted_ptrs[deleted_n++] = data;
-						deleted_ptrs[deleted_n++] = data->client->pty->data;
 
 						free_data(data->client->pty->data, &data_set);
 						free_data(data, &data_set);
@@ -403,13 +385,8 @@ int main(int argc, char *argv[])
 				{
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
-						fprintf(stderr, "Connection close\n");
-
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->master_fd, NULL);
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->client->client_fd, NULL);
-
-						deleted_ptrs[deleted_n++] = data;
-						deleted_ptrs[deleted_n++] = data->pty->client->data;
 
 						free_data(data->pty->client->data, &data_set);
 						free_data(data, &data_set);

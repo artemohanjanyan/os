@@ -14,6 +14,7 @@
 #include <stdlib.h>
 
 #include "string_buffer.h"
+#include "ptr_set.h"
 
 #define BUF_SIZE 1024
 #define MAX_EVENTS 50
@@ -55,7 +56,7 @@ struct event_data
 	};
 };
 
-int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd)
+int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd, struct ptr_set *data_set)
 {
 	int child_pid;
 	child_pid = fork();
@@ -71,6 +72,29 @@ int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd)
 		close(slave_fd);
 		close(server_fd);
 		close(epoll_fd);
+
+		struct ptr_set_iterator *it = ptr_set_get_iterator(data_set);
+		if (it != NULL)
+		{
+			for (; ptr_set_iterator_not_end(data_set, it); ptr_set_iterator_next(it))
+			{
+				struct event_data *data = (struct event_data*) ptr_set_iterator_get(it);
+				switch (data->type)
+				{
+					case SERVER:
+						close(*data->server);
+						break;
+					case CLIENT:
+						close(data->client->client_fd);
+						break;
+					case CONNECTION:
+						close(data->pty->master_fd);
+						break;
+				}
+			}
+			ptr_set_iterator_free(it);
+		}
+
 		if (!dup_fail && setsid() != -1 && ioctl(0, TIOCSCTTY, 1) != -1)
 			execlp("/bin/sh", "/bin/sh", NULL);
 		exit(0);
@@ -119,6 +143,31 @@ int daemonize()
 	}
 
 	return 0;
+}
+
+void free_data(struct event_data *data, struct ptr_set *data_set)
+{
+	switch (data->type)
+	{
+		case SERVER:
+			close(*data->server);
+			free(data->server);
+			break;
+
+		case CLIENT:
+			close(data->client->client_fd);
+			string_buffer_free(&data->client->buffer);
+			free(data->client);
+			break;
+
+		case CONNECTION:
+			close(data->pty->master_fd);
+			string_buffer_free(&data->pty->buffer);
+			free(data->pty);
+			break;
+	}
+	free(data);
+	ptr_set_erase(data_set, data);
 }
 
 int main(int argc, char *argv[])
@@ -186,6 +235,10 @@ int main(int argc, char *argv[])
 	if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &event) == -1)
 		goto close_epoll;
 
+	struct ptr_set data_set;
+	if (!ptr_set_init(&data_set))
+		goto close_epoll;
+
 	/* ------------------------
 	   Communicate with clients
 	   ------------------------ */
@@ -218,7 +271,7 @@ int main(int argc, char *argv[])
 							(slave_fd = open(ptsname(master_fd), O_RDWR)) == -1)
 						goto close_master;
 
-					if (fork_term(master_fd, slave_fd, server_fd, epoll_fd) == -1)
+					if (fork_term(master_fd, slave_fd, server_fd, epoll_fd, &data_set) == -1)
 					{
 						close(slave_fd);
 						goto close_master;
@@ -241,23 +294,23 @@ int main(int argc, char *argv[])
 
 					event.events = EPOLLIN | EPOLLRDHUP;
 
-					data = (struct event_data*) malloc(sizeof(struct event_data));
-					if (data == NULL)
+					struct event_data *client_data = (struct event_data*) malloc(sizeof(struct event_data));
+					if (client_data == NULL)
 						goto close_client;
-					data->type = CLIENT;
-					data->client = client;
-					client->data = data;
-					event.data.ptr = data;
+					client_data->type = CLIENT;
+					client_data->client = client;
+					client->data = client_data;
+					event.data.ptr = client_data;
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client->client_fd, &event) == -1)
 						goto free_client_data;
 
-					data = (struct event_data*) malloc(sizeof(struct event_data));
-					if (data == NULL)
+					struct event_data *pty_data = (struct event_data*) malloc(sizeof(struct event_data));
+					if (pty_data == NULL)
 						goto unregister_client;
-					data->type = CONNECTION;
-					data->pty = pty;
-					pty->data = data;
-					event.data.ptr = data;
+					pty_data->type = CONNECTION;
+					pty_data->pty = pty;
+					pty->data = pty_data;
+					event.data.ptr = pty_data;
 					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty->master_fd, &event) == -1)
 						goto free_pty_data;
 
@@ -266,6 +319,9 @@ int main(int argc, char *argv[])
 
 					if (string_buffer_init(&pty->buffer))
 						goto free_client_buffer;
+
+					ptr_set_insert(&data_set, client_data);
+					ptr_set_insert(&data_set, pty_data);
 
 					goto server_finally;
 
@@ -299,18 +355,12 @@ int main(int argc, char *argv[])
 
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->client_fd, NULL);
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->pty->master_fd, NULL);
-						close(data->client->client_fd);
-						close(data->client->pty->master_fd);
 
 						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->client->pty->data;
 
-						string_buffer_free(&data->client->pty->buffer);
-						free(data->client->pty->data);
-						free(data->client->pty);
-						string_buffer_free(&data->client->buffer);
-						free(data->client);
-						free(data);
+						free_data(data->client->pty->data, &data_set);
+						free_data(data, &data_set);
 
 						break;
 					}
@@ -357,18 +407,12 @@ int main(int argc, char *argv[])
 
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->master_fd, NULL);
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->client->client_fd, NULL);
-						close(data->pty->master_fd);
-						close(data->pty->client->client_fd);
 
 						deleted_ptrs[deleted_n++] = data;
 						deleted_ptrs[deleted_n++] = data->pty->client->data;
 
-						string_buffer_free(&data->pty->client->buffer);
-						free(data->pty->client->data);
-						free(data->pty->client);
-						string_buffer_free(&data->pty->buffer);
-						free(data->pty);
-						free(data);
+						free_data(data->pty->client->data, &data_set);
+						free_data(data, &data_set);
 
 						break;
 					}
@@ -419,6 +463,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	while (!ptr_set_is_empty(&data_set))
+		free_data((struct event_data*) ptr_set_first(&data_set), &data_set);
+	ptr_set_free(&data_set);
 close_epoll:
 	close(epoll_fd);
 close_server:

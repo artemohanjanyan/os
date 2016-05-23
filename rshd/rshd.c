@@ -186,7 +186,7 @@ int main(int argc, char *argv[])
 		struct sockaddr_in address;
 		address.sin_family = AF_INET;
 		address.sin_addr.s_addr = INADDR_ANY;
-		address.sin_port = htons(atoi(argv[1]));
+		address.sin_port = htons((uint16_t) atoi(argv[1]));
 
 		int enable = 1;
 		setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable));

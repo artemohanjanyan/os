@@ -106,6 +106,91 @@ int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd, struct p
 	}
 }
 
+int open_connection(int server_fd, int epoll_fd, struct ptr_set *data_set)
+{
+	int master_fd, slave_fd;
+	if ((master_fd = posix_openpt(O_RDWR)) == -1 ||
+			grantpt(master_fd) == -1 ||
+			unlockpt(master_fd) == -1 ||
+			(slave_fd = open(ptsname(master_fd), O_RDWR)) == -1)
+		goto close_master;
+
+	if (fork_term(master_fd, slave_fd, server_fd, epoll_fd, data_set) == -1)
+	{
+		close(slave_fd);
+		goto close_master;
+	}
+
+	struct client_data *client;
+	client = (struct client_data*) malloc(sizeof(struct client_data));
+	struct pty_data *pty;
+	pty = (struct pty_data*) malloc(sizeof(struct pty_data));
+	pty->skip = 0;
+
+	client->pty = pty;
+	pty->client = client;
+
+	client->client_fd = accept(server_fd, NULL, NULL);
+	pty->master_fd = master_fd;
+
+	if (client->client_fd == -1)
+		goto free_data;
+
+	struct epoll_event event;
+	event.events = EPOLLIN | EPOLLRDHUP;
+
+	struct event_data *client_data = (struct event_data*) malloc(sizeof(struct event_data));
+	if (client_data == NULL)
+		goto close_client;
+	client_data->type = CLIENT;
+	client_data->client = client;
+	client->data = client_data;
+	event.data.ptr = client_data;
+	if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client->client_fd, &event) == -1)
+		goto free_client_data;
+
+	struct event_data *pty_data = (struct event_data*) malloc(sizeof(struct event_data));
+	if (pty_data == NULL)
+		goto unregister_client;
+	pty_data->type = CONNECTION;
+	pty_data->pty = pty;
+	pty->data = pty_data;
+	event.data.ptr = pty_data;
+	if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty->master_fd, &event) == -1)
+		goto free_pty_data;
+
+	if (string_buffer_init(&client->buffer))
+		goto free_pty_data;
+
+	if (string_buffer_init(&pty->buffer))
+		goto free_client_buffer;
+
+	ptr_set_insert(data_set, client_data);
+	ptr_set_insert(data_set, pty_data);
+
+	return 0;
+
+free_client_buffer:
+	string_buffer_free(&client->buffer);
+free_pty_data:
+	free(pty_data);
+unregister_client:
+	epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->client_fd, NULL);
+free_client_data:
+	free(client_data);
+close_client:
+	close(client->client_fd);
+free_data:
+	free(client);
+	free(pty);
+close_master:
+	if (master_fd != -1)
+		close(master_fd);
+	printf("Cant open pty: %s\n", strerror(errno));
+
+	return 1;
+}
+
 int daemonize()
 {
 	int pid = fork();
@@ -250,89 +335,8 @@ int main(int argc, char *argv[])
 			switch (data->type)
 			{
 				case SERVER:
-				{
-					int master_fd, slave_fd;
-					if ((master_fd = posix_openpt(O_RDWR)) == -1 ||
-							grantpt(master_fd) == -1 ||
-							unlockpt(master_fd) == -1 ||
-							(slave_fd = open(ptsname(master_fd), O_RDWR)) == -1)
-						goto close_master;
-
-					if (fork_term(master_fd, slave_fd, server_fd, epoll_fd, &data_set) == -1)
-					{
-						close(slave_fd);
-						goto close_master;
-					}
-
-					struct client_data *client;
-					client = (struct client_data*) malloc(sizeof(struct client_data));
-					struct pty_data *pty;
-					pty = (struct pty_data*) malloc(sizeof(struct pty_data));
-					pty->skip = 0;
-
-					client->pty = pty;
-					pty->client = client;
-
-					client->client_fd = accept(server_fd, NULL, NULL);
-					pty->master_fd = master_fd;
-
-					if (client->client_fd == -1)
-						goto free_data;
-
-					event.events = EPOLLIN | EPOLLRDHUP;
-
-					struct event_data *client_data = (struct event_data*) malloc(sizeof(struct event_data));
-					if (client_data == NULL)
-						goto close_client;
-					client_data->type = CLIENT;
-					client_data->client = client;
-					client->data = client_data;
-					event.data.ptr = client_data;
-					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client->client_fd, &event) == -1)
-						goto free_client_data;
-
-					struct event_data *pty_data = (struct event_data*) malloc(sizeof(struct event_data));
-					if (pty_data == NULL)
-						goto unregister_client;
-					pty_data->type = CONNECTION;
-					pty_data->pty = pty;
-					pty->data = pty_data;
-					event.data.ptr = pty_data;
-					if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pty->master_fd, &event) == -1)
-						goto free_pty_data;
-
-					if (string_buffer_init(&client->buffer))
-						goto free_pty_data;
-
-					if (string_buffer_init(&pty->buffer))
-						goto free_client_buffer;
-
-					ptr_set_insert(&data_set, client_data);
-					ptr_set_insert(&data_set, pty_data);
-
-					goto server_finally;
-
-				free_client_buffer:
-					string_buffer_free(&client->buffer);
-				free_pty_data:
-					free(data);
-				unregister_client:
-					epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->client_fd, NULL);
-				free_client_data:
-					free(data);
-				close_client:
-					close(client->client_fd);
-				free_data:
-					free(client);
-					free(pty);
-				close_master:
-					if (master_fd != -1)
-						close(master_fd);
-					printf("Cant open pty: %s\n", strerror(errno));
-
-				server_finally:
+					open_connection(server_fd, epoll_fd, &data_set);
 					break;
-				}
 
 				case CLIENT:
 				{

@@ -106,6 +106,61 @@ int fork_term(int master_fd, int slave_fd, int server_fd, int epoll_fd, struct p
 	}
 }
 
+int daemonize()
+{
+	int pid = fork();
+	if (pid == -1)
+		return -1;
+
+	if (pid != 0)
+		exit(0);
+
+	int sid = setsid();
+	if (sid == -1)
+		return -1;
+
+	pid = fork();
+	if (pid == -1)
+		return -1;
+
+	if (pid != 0)
+	{
+		FILE *file = fopen("/tmp/rshd.pid", "w");
+		if (file == NULL)
+			exit(0);
+		fprintf(file, "%d\n", pid);
+		fclose(file);
+		exit(0);
+	}
+
+	return 0;
+}
+
+void free_data(struct event_data *data, struct ptr_set *data_set)
+{
+	switch (data->type)
+	{
+		case SERVER:
+			close(*data->server);
+			free(data->server);
+			break;
+
+		case CLIENT:
+			close(data->client->client_fd);
+			string_buffer_free(&data->client->buffer);
+			free(data->client);
+			break;
+
+		case CONNECTION:
+			close(data->pty->master_fd);
+			string_buffer_free(&data->pty->buffer);
+			free(data->pty);
+			break;
+	}
+	free(data);
+	ptr_set_erase(data_set, data);
+}
+
 int open_connection(int server_fd, int epoll_fd, struct ptr_set *data_set)
 {
 	int master_fd, slave_fd;
@@ -191,60 +246,12 @@ close_master:
 	return 1;
 }
 
-int daemonize()
+void close_side(int epoll_fd, struct ptr_set *data_set, int side_fd, struct event_data *data)
 {
-	int pid = fork();
-	if (pid == -1)
-		return -1;
-
-	if (pid != 0)
-		exit(0);
-
-	int sid = setsid();
-	if (sid == -1)
-		return -1;
-
-	pid = fork();
-	if (pid == -1)
-		return -1;
-
-	if (pid != 0)
-	{
-		FILE *file = fopen("/tmp/rshd.pid", "w");
-		if (file == NULL)
-			exit(0);
-		fprintf(file, "%d\n", pid);
-		fclose(file);
-		exit(0);
-	}
-
-	return 0;
+	epoll_ctl(epoll_fd, EPOLL_CTL_DEL, side_fd, NULL);
+	free_data(data, data_set);
 }
 
-void free_data(struct event_data *data, struct ptr_set *data_set)
-{
-	switch (data->type)
-	{
-		case SERVER:
-			close(*data->server);
-			free(data->server);
-			break;
-
-		case CLIENT:
-			close(data->client->client_fd);
-			string_buffer_free(&data->client->buffer);
-			free(data->client);
-			break;
-
-		case CONNECTION:
-			close(data->pty->master_fd);
-			string_buffer_free(&data->pty->buffer);
-			free(data->pty);
-			break;
-	}
-	free(data);
-	ptr_set_erase(data_set, data);
-}
 
 int main(int argc, char *argv[])
 {
@@ -342,12 +349,8 @@ int main(int argc, char *argv[])
 				{
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
-						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->client_fd, NULL);
-						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->client->pty->master_fd, NULL);
-
-						free_data(data->client->pty->data, &data_set);
-						free_data(data, &data_set);
-
+						close_side(epoll_fd, &data_set, data->client->pty->master_fd, data->client->pty->data);
+						close_side(epoll_fd, &data_set, data->client->client_fd,      data);
 						break;
 					}
 
@@ -389,12 +392,8 @@ int main(int argc, char *argv[])
 				{
 					if (events[event_i].events & ~((uint32_t) EPOLLIN | EPOLLOUT))
 					{
-						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->master_fd, NULL);
-						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, data->pty->client->client_fd, NULL);
-
-						free_data(data->pty->client->data, &data_set);
-						free_data(data, &data_set);
-
+						close_side(epoll_fd, &data_set, data->pty->client->client_fd, data->pty->client->data);
+						close_side(epoll_fd, &data_set, data->pty->master_fd,         data);
 						break;
 					}
 
